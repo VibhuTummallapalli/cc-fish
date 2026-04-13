@@ -8,6 +8,10 @@ build/
 *.lib
 *.exp
 
+# Allow release DLL
+!release/
+!release/Fish.dll
+
 # IDE
 .vs/
 *.vcxproj.user
