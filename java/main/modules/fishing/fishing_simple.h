@@ -6,6 +6,42 @@
 #include <chrono>
 #include <atomic>
 #include <cmath>
+#include <thread>
+#include <Windows.h>
+
+// Window enumeration callback data
+struct window_enum_data {
+    DWORD target_pid;
+    HWND result;
+};
+
+// Callback for EnumWindows to find game window
+inline BOOL CALLBACK enum_windows_callback ( HWND hwnd, LPARAM lparam ) {
+    auto * data = reinterpret_cast<window_enum_data *> ( lparam );
+    
+    DWORD window_pid;
+    GetWindowThreadProcessId ( hwnd, &window_pid );
+    
+    if ( window_pid != data->target_pid ) return TRUE;
+    
+    // Check if visible and has a title
+    if ( !IsWindowVisible ( hwnd ) ) return TRUE;
+    
+    char title [ 256 ];
+    GetWindowTextA ( hwnd, title, sizeof ( title ) );
+    
+    // Look for cosmic or minecraft in title (case-insensitive)
+    std::string title_lower = title;
+    for ( auto & c : title_lower ) c = static_cast<char> ( tolower ( c ) );
+    
+    if ( title_lower.find ( "cosmic" ) != std::string::npos || 
+         title_lower.find ( "minecraft" ) != std::string::npos ) {
+        data->result = hwnd;
+        return FALSE;  // Stop enumeration
+    }
+    
+    return TRUE;
+}
 
 // Fishing module using bobber position detection
 // Detects when bobber gets yanked down (Y position drops suddenly)
@@ -34,8 +70,33 @@ private:
     // Stats
     std::atomic<int> m_fish_caught { 0 };
     
+    // Window handle cache
+    HWND m_game_window { nullptr };
+    
     // Position drop threshold for fish detection (bobber drops ~0.5 blocks when fish bites)
     static constexpr double DROP_THRESHOLD = 0.2;  // Bobber drops more than 0.2 blocks = fish
+    
+    // Find and cache the game window
+    HWND find_game_window ( ) {
+        // Check if cached window is still valid
+        if ( m_game_window && IsWindow ( m_game_window ) ) {
+            return m_game_window;
+        }
+        
+        // Find window in our process
+        window_enum_data data { };
+        data.target_pid = GetCurrentProcessId ( );
+        data.result = nullptr;
+        
+        EnumWindows ( enum_windows_callback, reinterpret_cast<LPARAM> ( &data ) );
+        
+        if ( data.result ) {
+            m_game_window = data.result;
+            LOG_INFO ( "Found game window: " << m_game_window );
+        }
+        
+        return m_game_window;
+    }
 
 public:
     explicit c_fishing ( c_java * java ) : m_java ( java ) { }
@@ -193,33 +254,38 @@ public:
         }
     }
 
-    // Perform a right-click action (reel in or cast)
+    // Perform a right-click action using PostMessage to game window
     void right_click ( ) {
-        if ( !m_java ) return;
-
-        c_minecraft minecraft ( m_java );
-        c_entity player = minecraft.get_player ( );
-        c_world world = minecraft.get_world ( );
-        c_player_controller_mp player_controller = minecraft.get_player_controller ( );
-
-        if ( !player.get ( ) || !world.get ( ) || !player_controller.get ( ) ) {
-            LOG_ERROR ( "right_click: missing player/world/controller" );
-            return;
+        HWND hwnd = find_game_window ( );
+        
+        if ( hwnd ) {
+            // Get client area size
+            RECT rect;
+            GetClientRect ( hwnd, &rect );
+            int center_x = ( rect.right - rect.left ) / 2;
+            int center_y = ( rect.bottom - rect.top ) / 2;
+            
+            const LPARAM l_param = MAKELPARAM ( center_x, center_y );
+            
+            // Send right-click via window message
+            PostMessage ( hwnd, WM_RBUTTONDOWN, MK_RBUTTON, l_param );
+            std::this_thread::sleep_for ( std::chrono::milliseconds ( 50 ) );
+            PostMessage ( hwnd, WM_RBUTTONUP, 0, l_param );
+            
+            LOG_INFO ( "right_click: PostMessage to " << hwnd << " at (" << center_x << ", " << center_y << ")" );
         }
-
-        // Clear right-click delay
-        minecraft.set_right_click_delay ( 0 );
-
-        // Get held item (should be fishing rod)
-        c_itemstack held_item = player.get_held_item ( );
-        if ( !held_item.get ( ) ) {
-            LOG_WARNING ( "right_click: no held item" );
-            return;
+        else {
+            // Fallback to SendInput
+            INPUT input = { 0 };
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
+            SendInput ( 1, &input, sizeof ( INPUT ) );
+            std::this_thread::sleep_for ( std::chrono::milliseconds ( 50 ) );
+            input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+            SendInput ( 1, &input, sizeof ( INPUT ) );
+            
+            LOG_WARNING ( "right_click: fallback to SendInput (no window)" );
         }
-
-        // Perform right-click
-        player_controller.use_item ( player.get ( ), world.get ( ), held_item.get ( ) );
-        LOG_INFO ( "right_click: done" );
     }
 
     void set_enabled ( bool enabled ) {
