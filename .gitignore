@@ -1,0 +1,20 @@
+# Build outputs
+build/
+*.dll
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.exp
+
+# IDE
+.vs/
+*.vcxproj.user
+CMakeSettings.json
+
+# Logs
+*.log
+
+# FishingBot reference (not needed)
+FishingBot-main/
