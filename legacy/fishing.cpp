@@ -5,12 +5,20 @@
 #include "../../java/internal/native_bridge.h"
 #include "../../main/hack.h"
 
-void c_fishing::is_bobber ( const c_entity * entity ) {
+void c_fishing::is_bobber ( const c_entity * entity, const c_entity * local_player ) {
     if ( !g_hack->vars.m_autofishing_enabled )
         return;
 
     if ( !entity || !entity->is_fishing_bobber (  ) )
         return;
+
+    // If we have the local player, verify this bobber belongs to us
+    // This prevents false positives when other players are fishing nearby
+    if ( local_player && local_player->get ( ) ) {
+        if ( !entity->is_bobber_owned_by ( local_player->get ( ) ) ) {
+            return;  // This bobber belongs to another player, skip it
+        }
+    }
 
     auto uuid = entity->get_uuid ( ).get_value (  );
     auto pos = entity->get_pos ( );
@@ -40,7 +48,7 @@ void c_fishing::is_bobber ( const c_entity * entity ) {
 }
 
 void c_fishing::on_fish ( double x, double y, double z ) {
-    // called from a different thread — just flag it if the
+    // called from a different thread ï¿½ just flag it if the
     // sound is close enough to our bobber
     if ( !m_has_our_bobber )
         return;
@@ -88,7 +96,7 @@ void c_fishing::update (
 
     switch ( m_state ) {
     case e_state::idle: {
-        // initial cast — record our position so we can identify
+        // initial cast ï¿½ record our position so we can identify
         // which bobber belongs to us when it spawns
         m_local_pos_at_cast = m_local->get_pos ( );
         m_first_bobber_pending = true;

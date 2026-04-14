@@ -443,4 +443,35 @@ public:
         const auto & cache = entity_fish_hook_cache::get ( m_java );
         return cache.entity_fish_hook_class ? m_java->get_env ( )->IsInstanceOf ( m_obj, cache.entity_fish_hook_class ) : false;
     }
+
+    // Get the angler (owner) of a fishing bobber entity
+    // Tries EntityFishHook.angler first, then falls back to EntityThrowable.thrower
+    [[nodiscard]] jobject get_bobber_angler ( ) const {
+        if ( !is_fishing_bobber ( ) ) return nullptr;
+        
+        // Try the angler field first
+        const auto & fish_cache = entity_fish_hook_cache::get ( m_java );
+        if ( fish_cache.angler ) {
+            jobject angler = m_java->get_env ( )->GetObjectField ( m_obj, fish_cache.angler );
+            if ( angler ) return angler;
+        }
+        
+        // Fall back to EntityThrowable.thrower field
+        const auto & throwable_cache = entity_throwable_cache::get ( m_java );
+        if ( throwable_cache.thrower ) {
+            return m_java->get_env ( )->GetObjectField ( m_obj, throwable_cache.thrower );
+        }
+        
+        return nullptr;
+    }
+
+    // Check if this fishing bobber belongs to the given player entity
+    [[nodiscard]] bool is_bobber_owned_by ( const jobject player ) const {
+        if ( !player ) return false;
+        jobject angler = get_bobber_angler ( );
+        if ( !angler ) return false;
+        bool same = m_java->get_env ( )->IsSameObject ( angler, player );
+        m_java->get_env ( )->DeleteLocalRef ( angler );
+        return same;
+    }
 };

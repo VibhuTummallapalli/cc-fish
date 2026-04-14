@@ -920,12 +920,14 @@ struct block_cache {
 // Cached field/method IDs for entity fish hook
 struct entity_fish_hook_cache {
     jclass entity_fish_hook_class = nullptr;
+    jfieldID angler = nullptr;
 
     static entity_fish_hook_cache & get ( c_java * java ) {
         static entity_fish_hook_cache cache;
         static bool initialized = false;
         if ( !initialized ) {
             cache.entity_fish_hook_class = java->get_class ( xorstr_ ( "EntityFishHook" ) );
+            cache.angler = java->get_field ( xorstr_ ( "EntityFishHook.angler" ) );
             initialized = true;
         }
         return cache;

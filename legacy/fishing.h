@@ -22,7 +22,7 @@ public:
         int held_item_id
     );
 
-    void is_bobber ( const c_entity * entity );
+    void is_bobber ( const c_entity * entity, const c_entity * local_player = nullptr );
     void on_fish ( double x, double y, double z );
 
     void reset ( );

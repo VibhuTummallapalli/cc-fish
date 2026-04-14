@@ -155,7 +155,7 @@ private:
 
     // Helper methods
     void setup_callbacks ( );
-    void process_entities ( c_world & world, long long cur_tick, int local_entity_id );
+    void process_entities ( c_world & world, long long cur_tick, int local_entity_id, const c_entity * local_player );
     void process_players ( c_world & world, const c_texture_manager & texture_manager,
         long long cur_tick, int local_entity_id );
     void handle_player_selection ( const c_entity & local_player, c_world & world );

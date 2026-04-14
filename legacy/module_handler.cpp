@@ -122,7 +122,7 @@ void c_module_handler::initialize ( ) {
     setup_callbacks ( );
 }
 
-void c_module_handler::process_entities ( c_world & world, long long cur_tick, int local_entity_id ) {
+void c_module_handler::process_entities ( c_world & world, long long cur_tick, int local_entity_id, const c_entity * local_player ) {
     const auto entities = world.get_entities ( );
     for ( const auto & entity : entities ) {
         if ( !entity.is_valid ( ) || entity.get_entity_id ( ) == local_entity_id ) {
@@ -130,7 +130,7 @@ void c_module_handler::process_entities ( c_world & world, long long cur_tick, i
         }
         m_trajectories.process_entity ( entity, cur_tick );
 
-        m_fishing.is_bobber ( &entity );
+        m_fishing.is_bobber ( &entity, local_player );
     }
 }
 
@@ -334,7 +334,7 @@ void c_module_handler::update ( ) {
         m_fishing.update ( &local_player, &player_controller, &world, &held_item, local_item_id);
 
         // Process entities and players
-        process_entities ( world, cur_tick, local_entity_id );
+        process_entities ( world, cur_tick, local_entity_id, &local_player );
         process_players ( world, texture_manager, cur_tick, local_entity_id );
 
         m_trajectories.finalize_classifications ( );

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cmath>
 #include <thread>
+#include <unordered_set>
 #include <Windows.h>
 
 // Window enumeration callback data
@@ -24,8 +25,8 @@ inline BOOL CALLBACK enum_windows_callback ( HWND hwnd, LPARAM lparam ) {
     
     if ( window_pid != data->target_pid ) return TRUE;
     
-    // Check if visible and has a title
-    if ( !IsWindowVisible ( hwnd ) ) return TRUE;
+    // Check if window handle is valid (works even when minimized)
+    if ( !IsWindow ( hwnd ) ) return TRUE;
     
     char title [ 256 ];
     GetWindowTextA ( hwnd, title, sizeof ( title ) );
@@ -60,6 +61,11 @@ private:
     bool m_bobber_stable { false };
     std::chrono::steady_clock::time_point m_bobber_spawn_time;
     int m_debug_counter { 0 };
+    
+    // Track all known bobber IDs so we can identify NEW ones after casting
+    std::unordered_set<int> m_known_bobber_ids;
+    bool m_waiting_for_new_bobber { false };  // True after we cast, waiting for our bobber to spawn
+    std::chrono::steady_clock::time_point m_cast_time;
     
     // Pending actions (processed from main loop)
     std::atomic<bool> m_pending_reel { false };
@@ -117,11 +123,6 @@ public:
         if ( !fish_hook_class ) return;
 
         JNIEnv * env = m_java->get_env ( );
-        
-        // Get player position for distance check
-        double player_x = player.get_pos_x ( );
-        double player_y = player.get_pos_y ( );
-        double player_z = player.get_pos_z ( );
 
         // Get all entities
         std::vector<c_entity> entities = world.get_entities ( );
@@ -129,7 +130,14 @@ public:
         // Push local frame for safety
         if ( env->PushLocalFrame ( 128 ) < 0 ) return;
         
-        bool found_bobber = false;
+        // Build set of all current bobber IDs
+        std::unordered_set<int> current_bobber_ids;
+        // Get player position for initial distance check
+        double player_x = player.get_pos_x ( );
+        double player_y = player.get_pos_y ( );
+        double player_z = player.get_pos_z ( );
+        
+        bool found_our_bobber = false;
         
         for ( auto & entity : entities ) {
             if ( env->ExceptionCheck ( ) ) {
@@ -142,50 +150,89 @@ public:
             // Check if fishing bobber
             if ( !env->IsInstanceOf ( entity.get ( ), fish_hook_class ) ) continue;
             
-            // Check distance (should be within 64 blocks)
+            int entity_id = entity.get_entity_id ( );
+            current_bobber_ids.insert ( entity_id );
+            
+            // Get bobber position
             double bx = entity.get_pos_x ( );
             double by = entity.get_pos_y ( );
             double bz = entity.get_pos_z ( );
-            double dx = bx - player_x;
-            double dy = by - player_y;
-            double dz = bz - player_z;
-            double dist = std::sqrt ( dx * dx + dy * dy + dz * dz );
             
-            if ( dist > 64.0 ) continue;
+            // If we're not tracking any bobber
+            if ( m_bobber_entity_id == -1 ) {
+                // AFTER RECAST: Look for a NEW bobber (not in known set from before cast)
+                if ( m_waiting_for_new_bobber ) {
+                    if ( m_known_bobber_ids.find ( entity_id ) == m_known_bobber_ids.end ( ) ) {
+                        // This bobber is new! It must be ours
+                        auto now = std::chrono::steady_clock::now ( );
+                        auto since_cast = std::chrono::duration_cast<std::chrono::milliseconds> ( now - m_cast_time ).count ( );
+                        
+                        // Only accept if it appeared within 2 seconds of casting
+                        if ( since_cast < 2000 ) {
+                            m_bobber_entity_id = entity_id;
+                            m_bobber_spawn_time = now;
+                            m_last_motion_y = entity.get_motion_y ( );
+                            m_last_pos_y = by;
+                            m_stable_pos_y = by;
+                            m_bobber_stable = false;
+                            m_debug_counter = 0;
+                            m_waiting_for_new_bobber = false;
+                            LOG_SUCCESS ( "OUR bobber detected (NEW ID=" << entity_id << ") at: " << bx << ", " << by << ", " << bz );
+                            found_our_bobber = true;
+                            break;
+                        }
+                    }
+                    // Not a new bobber, skip
+                    continue;
+                }
+                
+                // INITIAL DETECTION (not waiting for recast): Use distance as fallback
+                // Only claim the CLOSEST bobber to us if it's very close
+                double dx = bx - player_x;
+                double dy = by - player_y;
+                double dz = bz - player_z;
+                double dist = std::sqrt ( dx * dx + dy * dy + dz * dz );
+                
+                // Very strict distance - bobber must be within 5 blocks (yours is typically 1-3 blocks away)
+                if ( dist < 5.0 ) {
+                    m_bobber_entity_id = entity_id;
+                    m_bobber_spawn_time = std::chrono::steady_clock::now ( );
+                    m_last_motion_y = entity.get_motion_y ( );
+                    m_last_pos_y = by;
+                    m_stable_pos_y = by;
+                    m_bobber_stable = false;
+                    m_debug_counter = 0;
+                    LOG_SUCCESS ( "OUR bobber detected (INITIAL ID=" << entity_id << ", dist=" << dist << ") at: " << bx << ", " << by << ", " << bz );
+                    found_our_bobber = true;
+                    break;
+                }
+                continue;
+            }
             
-            found_bobber = true;
+            // We're tracking a specific bobber - only process if this is it
+            if ( entity_id != m_bobber_entity_id ) continue;
             
-            // Get current motionY and posY
+            found_our_bobber = true;
+            
+            // Get current motionY
             double motion_y = entity.get_motion_y ( );
             
-            // Only check if bobber has been out for at least 2 seconds (to avoid cast motion)
+            // Only check if bobber has been out for at least 2.5 seconds (to avoid cast motion)
             auto now = std::chrono::steady_clock::now ( );
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds> ( now - m_bobber_spawn_time ).count ( );
             
-            if ( m_bobber_entity_id == -1 ) {
-                // New bobber detected
-                m_bobber_entity_id = 1;
-                m_bobber_spawn_time = now;
-                m_last_motion_y = motion_y;
-                m_last_pos_y = by;
-                m_stable_pos_y = by;
-                m_bobber_stable = false;
-                m_debug_counter = 0;
-                LOG_SUCCESS ( "Bobber detected at: " << bx << ", " << by << ", " << bz );
-            } else if ( elapsed > 2500 ) {
-                // Bobber has been out long enough
-                
+            if ( elapsed > 2500 ) {
                 // Debug: log values every 2 seconds
                 m_debug_counter++;
-                if ( m_debug_counter % 40 == 0 ) {  // ~every 2 seconds at 50ms tick
-                    LOG_INFO ( "Bobber: Y=" << by << " motionY=" << motion_y << " stable=" << m_stable_pos_y );
+                if ( m_debug_counter % 40 == 0 ) {
+                    LOG_INFO ( "Bobber ID=" << entity_id << ": Y=" << by << " motionY=" << motion_y << " stable=" << m_stable_pos_y );
                 }
                 
                 // Mark stable position once bobber settles (small motion)
                 if ( !m_bobber_stable && std::abs ( motion_y ) < 0.05 ) {
                     m_bobber_stable = true;
                     m_stable_pos_y = by;
-                    LOG_INFO ( "Bobber stabilized at Y=" << by );
+                    LOG_INFO ( "Bobber ID=" << entity_id << " stabilized at Y=" << by );
                 }
                 
                 // Check for fish bite: bobber drops significantly from stable position
@@ -206,11 +253,14 @@ public:
             break;  // Found our bobber
         }
         
-        // If no bobber found, reset
-        if ( !found_bobber && m_bobber_entity_id != -1 ) {
-            LOG_INFO ( "Bobber gone" );
+        // If our tracked bobber is gone (despawned/caught), reset tracking
+        if ( !found_our_bobber && m_bobber_entity_id != -1 ) {
+            LOG_INFO ( "Bobber ID=" << m_bobber_entity_id << " gone" );
             m_bobber_entity_id = -1;
         }
+        
+        // Update known bobber IDs for next frame
+        m_known_bobber_ids = std::move ( current_bobber_ids );
         
         env->PopLocalFrame ( nullptr );
     }
@@ -249,42 +299,48 @@ public:
             if ( now >= m_recast_time ) {
                 LOG_INFO ( "Recasting..." );
                 m_pending_recast.store ( false );
+                
+                // Mark that we're waiting for a NEW bobber to appear
+                m_cast_time = now;
+                m_waiting_for_new_bobber = true;
+                
                 right_click ( );
             }
         }
     }
 
-    // Perform a right-click action using PostMessage to game window
+    // Perform a right-click action using direct JNI calls (works when minimized)
     void right_click ( ) {
-        HWND hwnd = find_game_window ( );
-        
-        if ( hwnd ) {
-            // Get client area size
-            RECT rect;
-            GetClientRect ( hwnd, &rect );
-            int center_x = ( rect.right - rect.left ) / 2;
-            int center_y = ( rect.bottom - rect.top ) / 2;
+        try {
+            c_minecraft mc ( m_java );
             
-            const LPARAM l_param = MAKELPARAM ( center_x, center_y );
+            auto player = mc.get_player ( );
+            if ( !player.get ( ) ) {
+                LOG_WARNING ( "right_click: no player" );
+                return;
+            }
             
-            // Send right-click via window message
-            PostMessage ( hwnd, WM_RBUTTONDOWN, MK_RBUTTON, l_param );
-            std::this_thread::sleep_for ( std::chrono::milliseconds ( 50 ) );
-            PostMessage ( hwnd, WM_RBUTTONUP, 0, l_param );
+            auto world = mc.get_world ( );
+            if ( !world.get ( ) ) {
+                LOG_WARNING ( "right_click: no world" );
+                return;
+            }
             
-            LOG_INFO ( "right_click: PostMessage to " << hwnd << " at (" << center_x << ", " << center_y << ")" );
+            auto player_controller = mc.get_player_controller ( );
+            if ( !player_controller.get ( ) ) {
+                LOG_WARNING ( "right_click: no player controller" );
+                return;
+            }
+            
+            auto held_item = player.get_held_item ( );
+            
+            // Call use_item directly via JNI - works regardless of window focus
+            player_controller.use_item ( player.get ( ), world.get ( ), held_item.get ( ) );
+            
+            LOG_INFO ( "right_click: JNI use_item called" );
         }
-        else {
-            // Fallback to SendInput
-            INPUT input = { 0 };
-            input.type = INPUT_MOUSE;
-            input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
-            SendInput ( 1, &input, sizeof ( INPUT ) );
-            std::this_thread::sleep_for ( std::chrono::milliseconds ( 50 ) );
-            input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
-            SendInput ( 1, &input, sizeof ( INPUT ) );
-            
-            LOG_WARNING ( "right_click: fallback to SendInput (no window)" );
+        catch ( ... ) {
+            LOG_ERROR ( "right_click: exception in JNI call" );
         }
     }
 

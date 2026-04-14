@@ -126,7 +126,14 @@ public:
                 
                 if ( !is_bobber ) continue;
                 
-                LOG_INFO ( "update_bobber: found fishing bobber entity #" << entity_count );
+                // IMPORTANT: Only track bobbers that belong to the local player
+                // This prevents false positives when other players are fishing nearby
+                if ( !entity.is_bobber_owned_by ( player.get ( ) ) ) {
+                    LOG_INFO ( "update_bobber: skipping bobber #" << entity_count << " (belongs to another player)" );
+                    continue;
+                }
+                
+                LOG_INFO ( "update_bobber: found OUR fishing bobber entity #" << entity_count );
 
                 // Get bobber position
                 double bobber_x = entity.get_pos_x ( );

@@ -56,6 +56,9 @@ namespace mappings {
         set.classes [ xorstr_ ( "Block" ) ] = { xorstr_ ( "cosmicclient.mz" ), make_descriptor ( xorstr_ ( "cosmicclient.mz" ) ) };
         set.classes [ xorstr_ ( "EntityFishHook" ) ] = { xorstr_ ( "cosmicclient.OV" ), make_descriptor ( xorstr_ ( "cosmicclient.OV" ) ) };
         set.classes [ xorstr_ ( "GuiInventory" ) ] = { xorstr_ ( "cosmicclient.F_" ), make_descriptor ( xorstr_ ( "cosmicclient.F_" ) ) };
+
+        // EntityFishHook methods/fields
+        set.fields [ xorstr_ ( "EntityFishHook.angler" ) ] = { xorstr_ ( "a" ), xorstr_ ( "{EntityPlayer}" ), false };
         set.classes [ xorstr_ ( "GuiScreen" ) ] = { xorstr_ ( "cosmicclient.Ev" ), make_descriptor ( xorstr_ ( "cosmicclient.Ev" ) ) };
 
         // Methods
