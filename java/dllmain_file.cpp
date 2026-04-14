@@ -152,7 +152,7 @@ void main_loop ( HMODULE h_module ) {
             FISH_ERR ( "Exception in process_pending_actions" );
         }
 
-        Sleep ( 50 );
+        Sleep ( 20 );  // Faster polling to catch brief fish bites
     }
 
     // Cleanup

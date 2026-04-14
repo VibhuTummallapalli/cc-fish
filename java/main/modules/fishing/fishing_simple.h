@@ -65,6 +65,7 @@ private:
     // Track all known bobber IDs so we can identify NEW ones after casting
     std::unordered_set<int> m_known_bobber_ids;
     bool m_waiting_for_new_bobber { false };  // True after we cast, waiting for our bobber to spawn
+    bool m_just_reeled_in { false };  // True after reel, false after recast - don't pick up bobbers during this time!
     std::chrono::steady_clock::time_point m_cast_time;
     
     // Pending actions (processed from main loop)
@@ -80,7 +81,8 @@ private:
     HWND m_game_window { nullptr };
     
     // Position drop threshold for fish detection (bobber drops ~0.5 blocks when fish bites)
-    static constexpr double DROP_THRESHOLD = 0.2;  // Bobber drops more than 0.2 blocks = fish
+    static constexpr double DROP_THRESHOLD = 0.15;  // Lowered from 0.2 - fish bites can be subtle
+    static constexpr double MOTION_THRESHOLD = -0.04;  // Sudden downward motion indicates a bite
     
     // Find and cache the game window
     HWND find_game_window ( ) {
@@ -153,22 +155,60 @@ public:
             int entity_id = entity.get_entity_id ( );
             current_bobber_ids.insert ( entity_id );
             
+            // CRITICAL: Check if this bobber belongs to us (the local player)
+            // This prevents detecting other players' bobbers
+            bool is_our_bobber = entity.is_bobber_owned_by ( player.get ( ) );
+            
+            // Debug: log ownership check result for first few bobbers we see
+            static int ownership_log_count = 0;
+            if ( ownership_log_count < 5 && m_bobber_entity_id == -1 ) {
+                LOG_INFO ( "Bobber ID=" << entity_id << " ownership check: " << ( is_our_bobber ? "OURS" : "NOT OURS" ) );
+                ownership_log_count++;
+            }
+            
             // Get bobber position
             double bx = entity.get_pos_x ( );
             double by = entity.get_pos_y ( );
             double bz = entity.get_pos_z ( );
             
+            // Calculate distance
+            double dx = bx - player_x;
+            double dy = by - player_y;
+            double dz = bz - player_z;
+            double dist = std::sqrt ( dx * dx + dy * dy + dz * dz );
+            
             // If we're not tracking any bobber
             if ( m_bobber_entity_id == -1 ) {
-                // AFTER RECAST: Look for a NEW bobber (not in known set from before cast)
+                // If we just reeled in, DON'T pick up any bobber until we recast
+                // This prevents grabbing another player's bobber between reel-in and recast
+                if ( m_just_reeled_in ) {
+                    continue;
+                }
+                
+                // PRIMARY: Use ownership check if available (most reliable)
+                if ( is_our_bobber ) {
+                    m_bobber_entity_id = entity_id;
+                    m_bobber_spawn_time = std::chrono::steady_clock::now ( );
+                    m_last_motion_y = entity.get_motion_y ( );
+                    m_last_pos_y = by;
+                    m_stable_pos_y = by;
+                    m_bobber_stable = false;
+                    m_debug_counter = 0;
+                    m_waiting_for_new_bobber = false;
+                    LOG_SUCCESS ( "OUR bobber detected (OWNED, ID=" << entity_id << ", dist=" << dist << ") at: " << bx << ", " << by << ", " << bz );
+                    found_our_bobber = true;
+                    break;
+                }
+                
+                // FALLBACK: If ownership check isn't working, use strict criteria
+                // Only if we're waiting for a new bobber AND it's very close
                 if ( m_waiting_for_new_bobber ) {
                     if ( m_known_bobber_ids.find ( entity_id ) == m_known_bobber_ids.end ( ) ) {
-                        // This bobber is new! It must be ours
                         auto now = std::chrono::steady_clock::now ( );
                         auto since_cast = std::chrono::duration_cast<std::chrono::milliseconds> ( now - m_cast_time ).count ( );
                         
-                        // Only accept if it appeared within 2 seconds of casting
-                        if ( since_cast < 2000 ) {
+                        // Much stricter: NEW bobber + within 1 second of cast + within 3 blocks
+                        if ( since_cast < 1000 && dist < 3.0 ) {
                             m_bobber_entity_id = entity_id;
                             m_bobber_spawn_time = now;
                             m_last_motion_y = entity.get_motion_y ( );
@@ -177,24 +217,16 @@ public:
                             m_bobber_stable = false;
                             m_debug_counter = 0;
                             m_waiting_for_new_bobber = false;
-                            LOG_SUCCESS ( "OUR bobber detected (NEW ID=" << entity_id << ") at: " << bx << ", " << by << ", " << bz );
+                            LOG_WARNING ( "OUR bobber detected (FALLBACK: NEW+CLOSE ID=" << entity_id << ", dist=" << dist << ") - ownership check may not be working!" );
                             found_our_bobber = true;
                             break;
                         }
                     }
-                    // Not a new bobber, skip
-                    continue;
                 }
                 
-                // INITIAL DETECTION (not waiting for recast): Use distance as fallback
-                // Only claim the CLOSEST bobber to us if it's very close
-                double dx = bx - player_x;
-                double dy = by - player_y;
-                double dz = bz - player_z;
-                double dist = std::sqrt ( dx * dx + dy * dy + dz * dz );
-                
-                // Very strict distance - bobber must be within 5 blocks (yours is typically 1-3 blocks away)
-                if ( dist < 5.0 ) {
+                // INITIAL CAST: If no bobber is being tracked yet and not waiting for recast,
+                // use very strict distance (2 blocks) as absolute fallback
+                if ( !m_waiting_for_new_bobber && dist < 2.0 ) {
                     m_bobber_entity_id = entity_id;
                     m_bobber_spawn_time = std::chrono::steady_clock::now ( );
                     m_last_motion_y = entity.get_motion_y ( );
@@ -202,10 +234,12 @@ public:
                     m_stable_pos_y = by;
                     m_bobber_stable = false;
                     m_debug_counter = 0;
-                    LOG_SUCCESS ( "OUR bobber detected (INITIAL ID=" << entity_id << ", dist=" << dist << ") at: " << bx << ", " << by << ", " << bz );
+                    LOG_WARNING ( "OUR bobber detected (FALLBACK: VERY CLOSE ID=" << entity_id << ", dist=" << dist << ") - ownership check may not be working!" );
                     found_our_bobber = true;
                     break;
                 }
+                
+                // Skip bobbers that don't pass ownership or fallback criteria
                 continue;
             }
             
@@ -236,14 +270,22 @@ public:
                 }
                 
                 // Check for fish bite: bobber drops significantly from stable position
+                // OR sudden strong downward motion (catches brief dips)
                 if ( m_bobber_stable ) {
                     double drop = m_stable_pos_y - by;
+                    bool position_bite = drop > DROP_THRESHOLD;
+                    bool motion_bite = motion_y < MOTION_THRESHOLD && m_last_motion_y >= -0.02;  // Sudden downward motion
                     
-                    if ( drop > DROP_THRESHOLD ) {
-                        LOG_SUCCESS ( "FISH BITE! Y dropped " << drop << " blocks (from " << m_stable_pos_y << " to " << by << ")" );
+                    if ( position_bite || motion_bite ) {
+                        if ( motion_bite && !position_bite ) {
+                            LOG_SUCCESS ( "FISH BITE! Motion detected: " << motion_y << " (prev: " << m_last_motion_y << ")" );
+                        } else {
+                            LOG_SUCCESS ( "FISH BITE! Y dropped " << drop << " blocks (from " << m_stable_pos_y << " to " << by << ")" );
+                        }
                         m_pending_reel.store ( true );
                         m_fish_caught++;
                         m_bobber_entity_id = -1;  // Reset bobber tracking
+                        m_just_reeled_in = true;  // Don't pick up ANY bobber until we recast!
                     }
                 }
             }
@@ -303,6 +345,7 @@ public:
                 // Mark that we're waiting for a NEW bobber to appear
                 m_cast_time = now;
                 m_waiting_for_new_bobber = true;
+                m_just_reeled_in = false;  // Now we can look for our new bobber
                 
                 right_click ( );
             }
