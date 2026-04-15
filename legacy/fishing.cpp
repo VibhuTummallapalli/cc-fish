@@ -1,6 +1,7 @@
 // c_fishing.cpp
 #include "fishing.h"
 
+#include <limits>
 #include "../../java/internal/entity.h"
 #include "../../java/internal/native_bridge.h"
 #include "../../main/hack.h"
@@ -12,28 +13,27 @@ void c_fishing::is_bobber ( const c_entity * entity, const c_entity * local_play
     if ( !entity || !entity->is_fishing_bobber (  ) )
         return;
 
-    // If we have the local player, verify this bobber belongs to us
-    // This prevents false positives when other players are fishing nearby
-    if ( local_player && local_player->get ( ) ) {
-        if ( !entity->is_bobber_owned_by ( local_player->get ( ) ) ) {
-            return;  // This bobber belongs to another player, skip it
-        }
-    }
+    // Need local player position to find closest bobber
+    if ( !local_player || !local_player->get ( ) )
+        return;
 
     auto uuid = entity->get_uuid ( ).get_value (  );
     auto pos = entity->get_pos ( );
+    auto player_pos = local_player->get_pos ( );
 
-    // update tracked position regardless
+    // update tracked position
     m_tracked_bobbers [ uuid ] = pos;
 
-    // if we don't have a bobber yet and we're expecting one,
-    // claim the first fishing bobber that spawns near us
+    double dist_sq = distance_sq ( pos, player_pos );
+
+    // Always track the closest bobber to the player
+    // This handles cases where other players are fishing nearby
     if ( !m_has_our_bobber && m_first_bobber_pending ) {
-        double dist_sq = distance_sq ( pos, m_local_pos_at_cast );
-        // bobber spawns right next to the player, generous threshold
+        // First bobber we see after casting - claim it if close enough
         if ( dist_sq < 6.0 * 6.0 ) {
             m_our_bobber_uuid = uuid;
             m_our_bobber_pos = pos;
+            m_closest_bobber_dist_sq = dist_sq;
             m_has_our_bobber = true;
             m_first_bobber_pending = false;
             m_state = e_state::waiting;
@@ -41,9 +41,18 @@ void c_fishing::is_bobber ( const c_entity * entity, const c_entity * local_play
         return;
     }
 
-    // if this is our tracked bobber, keep its position fresh
-    if ( m_has_our_bobber && uuid == m_our_bobber_uuid ) {
-        m_our_bobber_pos = pos;
+    if ( m_has_our_bobber ) {
+        // If this bobber is closer than our current one, switch to it
+        if ( dist_sq < m_closest_bobber_dist_sq ) {
+            m_our_bobber_uuid = uuid;
+            m_our_bobber_pos = pos;
+            m_closest_bobber_dist_sq = dist_sq;
+        }
+        // Keep updating position of our tracked bobber
+        else if ( uuid == m_our_bobber_uuid ) {
+            m_our_bobber_pos = pos;
+            m_closest_bobber_dist_sq = dist_sq;
+        }
     }
 }
 
@@ -131,6 +140,7 @@ void c_fishing::update (
         m_reel_in.store ( false, std::memory_order_release );
         m_has_our_bobber = false;
         m_our_bobber_uuid = {};
+        m_closest_bobber_dist_sq = std::numeric_limits<double>::max ( );
 
         m_state = e_state::recasting;
         m_state_timestamp = now;
@@ -161,6 +171,7 @@ void c_fishing::reset ( ) {
     m_our_bobber_uuid = {};
     m_our_bobber_pos = {};
     m_has_our_bobber = false;
+    m_closest_bobber_dist_sq = std::numeric_limits<double>::max ( );
     m_first_bobber_pending = false;
     m_reel_in.store ( false );
     m_state = e_state::idle;

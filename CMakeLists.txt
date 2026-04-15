@@ -12,15 +12,18 @@ endif()
 # Find JNI
 find_package(JNI REQUIRED)
 
-# Source files
+# Source files - LEGACY VERSION
 set(SOURCES
     java/dllmain_file.cpp
     java/java/java.cpp
+    legacy/fishing.cpp
+    legacy/module_handler.cpp
 )
 
 # Header files (for IDE)
 file(GLOB_RECURSE HEADERS
     "java/*.h"
+    "legacy/*.h"
 )
 
 # Create DLL
@@ -32,6 +35,7 @@ target_include_directories(Fish PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/java/java
     ${CMAKE_CURRENT_SOURCE_DIR}/java/java/internal
     ${CMAKE_CURRENT_SOURCE_DIR}/java/main
+    ${CMAKE_CURRENT_SOURCE_DIR}/legacy
     ${JNI_INCLUDE_DIRS}
 )
 
