@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include "../../math/vec.h"
 #include "../../java/internal/uuid.h"
 
@@ -45,6 +46,7 @@ private:
     std::unordered_map<c_uuid::uuid_value, vec3<double>, c_uuid::uuid_value::hash> m_tracked_bobbers;
     vec3<double> m_our_bobber_pos {};
     bool m_has_our_bobber = false;
+    double m_closest_bobber_dist_sq = std::numeric_limits<double>::max ( );
 
     std::atomic<bool> m_reel_in { false };
     vec3<double> m_fish_sound_pos {};
